@@ -36,44 +36,40 @@ func NewApp(config Config) *App {
 }
 
 // ValidateSignature validates the GitHub webhook signature
-func (app *App) ValidateSignature(body []byte, signatureHeader string) bool {
-	if signatureHeader == "" || len(signatureHeader) < 7 {
-		app.logger.Error("Invalid signature header")
-		return false
-	}
-	app.logger.Debug("Validating signature...")
-
+func (app *App) ComputeSignature(body []byte) string {
 	computedHash := hmac.New(sha256.New, []byte(app.config.Secret))
 	computedHash.Write(body)
-	expectedSig := hex.EncodeToString(computedHash.Sum(nil))
-
-	return hmac.Equal([]byte(expectedSig), []byte(signatureHeader[7:]))
+	return "sha256=" + hex.EncodeToString(computedHash.Sum(nil))
 }
 
 // WebhookHandler handles GitHub webhook requests
 func (app *App) WebhookHandler(w http.ResponseWriter, r *http.Request) {
-	app.logger.Debug("Received webhook request")
-
 	if r.Method != http.MethodPost {
-		app.logger.Error("not-allowed", "method", r.Method)
+		app.logger.Error("not-allowed", "method", r.Method, "path", r.URL.Path)
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		app.logger.Error("reading", "error", err)
+		app.logger.Error("reading", "error", err, "method", r.Method, "path", r.URL.Path)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
 	signatureHeader := r.Header.Get("X-Hub-Signature-256")
-	if app.ValidateSignature(body, signatureHeader) {
-		app.logger.Info("Payload Validated")
-		w.Write([]byte("Payload Validated\n"))
-	} else {
-		app.logger.Warn("Unauthorized - Signature Mismatch")
-		http.Error(w, "Unauthorized - Signature Mismatch", http.StatusUnauthorized)
+	app.logger.Info("request", "method", r.Method, "path", r.URL.Path, "signature", signatureHeader)
+	if signatureHeader == "" || len(signatureHeader) < 7 {
+		app.logger.Warn("signature-header-invalid", "signature", signatureHeader)
+		http.Error(w, "Unauthorized - Invalid Signature Header", http.StatusUnauthorized)
 	}
+	computeSignature := app.ComputeSignature(body)
+	if !hmac.Equal([]byte(computeSignature), []byte(signatureHeader)) {
+		app.logger.Warn("signature-mismatch", "compute", computeSignature, "expected", signatureHeader)
+		http.Error(w, "Unauthorized - Signature Mismatch", http.StatusUnauthorized)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	w.Write([]byte("OK\n"))
 }
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
@@ -106,8 +102,8 @@ var rootCmd = &cobra.Command{
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		mux := http.NewServeMux()
-		mux.HandleFunc("/webhook", application.WebhookHandler)
-		mux.HandleFunc("/healthz", healthHandler)
+		mux.HandleFunc("/", application.WebhookHandler)
+		mux.HandleFunc("GET /healthz", healthHandler)
 
 		application.logger.Info("listening", "addr", application.config.Address)
 		if err := http.ListenAndServe(application.config.Address, mux); err != nil {

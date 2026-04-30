@@ -1,6 +1,8 @@
 version: "3"
 
 tasks:
+  run:
+    - go run main.go --secret dummy
   build:
     desc: Build the container image with podman
     cmds:
