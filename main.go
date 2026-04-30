@@ -4,16 +4,21 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 
-	"golang.org/x/exp/slog"
+	"github.com/spf13/cobra"
 )
 
 // Config holds configuration values
 type Config struct {
-	Secret string
+	Secret    string
+	Address   string
+	LogLevel  string
+	LogFormat string
 }
 
 // App encapsulates the application logic and dependencies
@@ -21,6 +26,8 @@ type App struct {
 	config Config
 	logger *slog.Logger
 }
+
+var application = App{}
 
 // NewApp creates a new App instance
 func NewApp(config Config) *App {
@@ -48,13 +55,13 @@ func (app *App) WebhookHandler(w http.ResponseWriter, r *http.Request) {
 	app.logger.Debug("Received webhook request")
 
 	if r.Method != http.MethodPost {
-		app.logger.Error("Method Not Allowed")
+		app.logger.Error("not-allowed", "method", r.Method)
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		app.logger.Error("Error reading request body: %v", err)
+		app.logger.Error("reading", "error", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
@@ -69,16 +76,57 @@ func (app *App) WebhookHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func main() {
-	config := Config{Secret: os.Getenv("WEBHOOK_SECRET")}
-	app := NewApp(config)
+func healthHandler(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
+}
 
-	app.logger.Info("Starting webhook server...")
-	http.HandleFunc("/webhook", app.WebhookHandler)
-	listenAddr := os.Getenv("LISTEN_ADDR")
-	if listenAddr == "" {
-		listenAddr = ":8080"
+var rootCmd = &cobra.Command{
+	Use: "oidc-redirect",
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		var lvl slog.Level
+		if err := lvl.UnmarshalText([]byte(application.config.LogLevel)); err != nil {
+			return err
+		}
+		switch application.config.LogFormat {
+		case "fmt":
+			application.logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: lvl}))
+		case "json":
+			application.logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl}))
+		default:
+			return errors.New("log-format invalid")
+		}
+		if application.config.Secret == "" {
+			application.config.Secret = os.Getenv("WEBHOOK_SECRET")
+		}
+		if application.config.Secret == "" {
+			return errors.New("missing webhook secret")
+		}
+		return nil
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/webhook", application.WebhookHandler)
+		mux.HandleFunc("/healthz", healthHandler)
+
+		application.logger.Info("listening", "addr", application.config.Address)
+		if err := http.ListenAndServe(application.config.Address, mux); err != nil {
+			return err
+		}
+		return nil
+	},
+}
+
+func init() {
+	flags := rootCmd.Flags()
+	flags.StringVar(&application.config.Address, "address", ":8080", "Address for listening")
+	flags.StringVar(&application.config.LogLevel, "log-level", "INFO", "loglevel")
+	flags.StringVar(&application.config.LogFormat, "log-format", "json", "logformat (fmt, json)")
+	flags.StringVar(&application.config.Secret, "secret", "", "webhook secret (env: WEBHOOK_SECRET)")
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		slog.Error("startup", "error", err)
 	}
-	app.logger.Info("Server is listening on %s...", listenAddr)
-	http.ListenAndServe(listenAddr, nil)
 }

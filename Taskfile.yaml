@@ -1,0 +1,19 @@
+version: "3"
+
+tasks:
+  build:
+    desc: Build the container image with podman
+    cmds:
+      - podman build -t github-webhook-validator .
+
+  push:
+    desc: Push the image to ghcr.io
+    cmds:
+      - podman push {{.IMAGE}}
+
+  publish:
+    desc: Build and push in one shot
+    cmds:
+      - task: build
+      - cmd: podman tag github-webhook-validator {{.IMAGE}}
+      - task: push
