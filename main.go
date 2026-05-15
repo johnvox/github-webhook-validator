@@ -46,13 +46,13 @@ func (app *App) ComputeSignature(body []byte) string {
 func (app *App) WebhookHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		app.logger.Error("not-allowed", "method", r.Method, "path", r.URL.Path)
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		http.Error(w, "GithubWebhookAuthz: Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		app.logger.Error("reading", "error", err, "method", r.Method, "path", r.URL.Path)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		http.Error(w, "GithubWebhookAuthz: Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
@@ -60,16 +60,16 @@ func (app *App) WebhookHandler(w http.ResponseWriter, r *http.Request) {
 	app.logger.Info("request", "method", r.Method, "path", r.URL.Path, "signature", signatureHeader)
 	if signatureHeader == "" || len(signatureHeader) < 7 {
 		app.logger.Warn("signature-header-invalid", "signature", signatureHeader)
-		http.Error(w, "Unauthorized - Invalid Signature Header", http.StatusUnauthorized)
+		http.Error(w, "GithubWebhookAuthz: Unauthorized - Invalid Signature Header", http.StatusUnauthorized)
 	}
 	computeSignature := app.ComputeSignature(body)
 	if !hmac.Equal([]byte(computeSignature), []byte(signatureHeader)) {
 		app.logger.Warn("signature-mismatch", "compute", computeSignature, "expected", signatureHeader)
-		http.Error(w, "Unauthorized - Signature Mismatch", http.StatusUnauthorized)
+		http.Error(w, "GithubWebhookAuthz: Unauthorized - Signature Mismatch", http.StatusUnauthorized)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
-	w.Write([]byte("OK\n"))
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("GithubWebhookAuthz: OK\n"))
 }
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
